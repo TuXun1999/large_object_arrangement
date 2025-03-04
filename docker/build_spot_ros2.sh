@@ -11,4 +11,4 @@ docker build \
        --build-arg hostuid=$hostuid\
        --build-arg hostgid=$hostgid\
        --rm\
-       .
+       ./docker
