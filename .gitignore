@@ -1,3 +1,7 @@
-spot_ros2
 denoising-diffusion-pytorch
 results
+data
+docker/old_docker/
+*/__pycache__
+__pycache__
+*/*/__pycache__
