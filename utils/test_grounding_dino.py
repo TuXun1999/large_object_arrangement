@@ -17,7 +17,7 @@ import matplotlib
 import cv2
 from PIL import Image
 
-home_addr = os.path.expanduser('~') + "/repo/SuperQ-GRASP/GroundingDINO"
+home_addr = os.path.expanduser('~') + "/large_object_rearrangement/GroundingDINO"
 IMAGE_NAME = "test_grounding_dino.jpg"
 CONFIG_PATH = home_addr + "/groundingdino/config/GroundingDINO_SwinT_OGC.py"
 WEIGHTS_PATH = home_addr + "/weights/groundingdino_swint_ogc.pth"
@@ -26,7 +26,7 @@ SAM_ENCODER_VERSION = "vit_h"
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model = load_model(CONFIG_PATH, WEIGHTS_PATH, DEVICE)
 print(sys.path)
-IMAGE_PATH = os.path.expanduser('~') + "/repo/SuperQ-GRASP/utils/" + IMAGE_NAME
+IMAGE_PATH = os.path.expanduser('~') + "/large_object_rearrangement/utils/" + IMAGE_NAME
 print(home_addr)
 TEXT_PROMPT = "blue chair"
 BOX_TRESHOLD = 0.3
@@ -100,11 +100,11 @@ print(image_masked[442, 213])
 data = Image.fromarray(image_masked, 'RGBA') 
 data.save('./utils/test_grounding_dino_result.png') 
 # Annotate image with detections
-box_annotator = sv.BoxAnnotator()
-mask_annotator = sv.MaskAnnotator()
-labels = [TEXT_PROMPT + " " + str(logits[0].numpy())]
-annotated_image = mask_annotator.annotate(scene=image_source.copy(), detections=detections)
-#annotated_image = box_annotator.annotate(scene=annotated_image, detections=detections, labels=labels)
+# box_annotator = sv.BoxAnnotator()
+# mask_annotator = sv.MaskAnnotator()
+# labels = [TEXT_PROMPT + " " + str(logits[0].numpy())]
+# annotated_image = mask_annotator.annotate(scene=image_source.copy(), detections=detections)
+# #annotated_image = box_annotator.annotate(scene=annotated_image, detections=detections, labels=labels)
 
-# matplotlib inline
-sv.plot_image(annotated_image, (16, 16))
+# # matplotlib inline
+# sv.plot_image(annotated_image, (16, 16))

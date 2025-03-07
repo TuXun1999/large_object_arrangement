@@ -251,7 +251,6 @@ def predict_grasp_pose_sq(camera_pose, \
                             sq_vertices_original, sq_transformation, normalize_stats)
     # Convert sq_verticies_original into a numpy array
     sq_vertices = np.array(sq_vertices_original).reshape(-1, 3)
-
     ## Find the sq associated to the selected point / the camera
     if point_select is None:
         camera_t = camera_pose[0:3, 3]
@@ -262,13 +261,14 @@ def predict_grasp_pose_sq(camera_pose, \
         sq_center = val["transformation"][0:3 , 3]
         sq_centers.append(sq_center)
     sq_centers = np.array(sq_centers)
-
     # Compute the convex hull
     pc_sq_centers= o3d.geometry.PointCloud()
     pc_sq_centers.points = o3d.utility.Vector3dVector(sq_centers)
     hull, hull_indices = pc_sq_centers.compute_convex_hull()
     hull_ls = o3d.geometry.LineSet.create_from_triangle_mesh(hull)
+    
     hull_ls.paint_uniform_color((1, 0, 0))
+
 
     # Optionally, let the user decide which superq region to grasp
     if region_select:

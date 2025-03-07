@@ -5,3 +5,7 @@ docker/old_docker/
 */__pycache__
 __pycache__
 */*/__pycache__
+venv
+instant-ngp
+GroundingDINO
+LoFTR

@@ -46,7 +46,14 @@ RUN apt-get update -q && \
     $(if [ "$EXPERIMENTAL_ZENOH_RMW" = "TRUE" ]; then echo "ros-humble-rmw-zenoh-cpp"; fi) \
     && rm -rf /var/lib/apt/lists/*
 
-
+# Install other libraries
+RUN apt-get update
+RUN apt-get install -y net-tools
+RUN apt-get install -y iputils-ping
+RUN apt-get install -y python3-virtualenv
+RUN apt-get install -y gdb
+RUN apt-get install -y mlocate
+RUN apt-get install -y openssh-client openssh-server
 
 
 
