@@ -67,8 +67,8 @@ function ping_spot
 #------------- Main Logic  ----------------
 
 # We have only tested Spot stack with Ubuntu 20.04.
-if ! ubuntu_version_equal 20.04; then
-    echo "SPOT development requires Ubuntu 20.04. Abort."
+if ! ubuntu_version_equal 22.04; then
+    echo "SPOT development requires Ubuntu 22.04. Abort."
     return 1
 fi
 
@@ -86,7 +86,7 @@ fi
 export PYTHONPATH=""
 
 # We'd like to use packages in the virtualenv
-export PYTHONPATH="${SPOT_PATH}/venv/spot/lib/python3.8/site-packages:${PYTHONPATH}:/usr/lib/python3/dist-packages"
+export PYTHONPATH="${SPOT_PATH}/venv/spot/lib/python3.10/site-packages:${PYTHONPATH}:/usr/lib/python3/dist-packages"
 if confirm "Are you working on the real robot ?"; then
     # Check if the environment variable SPOT_IP is set.
     # If not, then try to detect spot connection and set it.
