@@ -22,7 +22,10 @@ from bosdyn.client.gripper_camera_param import GripperCameraParamClient
 from bosdyn.client.robot_command import \
     RobotCommandBuilder, RobotCommandClient, \
         block_until_arm_arrives, blocking_stand, blocking_selfright
+import threading
 
+event_handler = threading.Event()
+image_collection_complete = False
 ROTATION_ANGLE = {
     'back_fisheye_image': 0,
     'frontleft_fisheye_image': -78,
@@ -62,6 +65,63 @@ def hand_image_resolution(gripper_param_client, resolution):
         params=gripper_camera_param_pb2.GripperCameraParams(camera_mode=camera_mode))
     response = gripper_param_client.set_camera_params(request)
 
+def store_images(options, image_client, counter):
+    while True:
+        # Check if the image collection is complete
+        if image_collection_complete:
+            break
+        # Wait for the event to be set before proceeding
+        event_handler.wait()
+        # Optionally capture one or more images.
+        if options.image_sources:
+            # Capture and save images to disk
+            pixel_format = pixel_format_string_to_enum(options.pixel_format)
+            image_request = [
+                build_image_request(source, pixel_format=pixel_format)
+                for source in options.image_sources
+            ]
+            image_responses = image_client.get_image(image_request)
+            print("Get image " + str(counter))
+            counter += 1
+            for image in image_responses:
+                num_bytes = 1  # Assume a default of 1 byte encodings.
+                if image.shot.image.pixel_format == image_pb2.Image.PIXEL_FORMAT_DEPTH_U16:
+                    dtype = np.uint16
+                    extension = '.png'
+                else:
+                    if image.shot.image.pixel_format == image_pb2.Image.PIXEL_FORMAT_RGB_U8:
+                        num_bytes = 3
+                    elif image.shot.image.pixel_format == image_pb2.Image.PIXEL_FORMAT_RGBA_U8:
+                        num_bytes = 4
+                    elif image.shot.image.pixel_format == image_pb2.Image.PIXEL_FORMAT_GREYSCALE_U8:
+                        num_bytes = 1
+                    elif image.shot.image.pixel_format == image_pb2.Image.PIXEL_FORMAT_GREYSCALE_U16:
+                        num_bytes = 2
+                    dtype = np.uint8
+                    extension = '.jpg'
+
+                img = np.frombuffer(image.shot.image.data, dtype=dtype)
+                if image.shot.image.format == image_pb2.Image.FORMAT_RAW:
+                    try:
+                        # Attempt to reshape array into a RGB rows X cols shape.
+                        img = img.reshape((image.shot.image.rows, image.shot.image.cols, num_bytes))
+                    except ValueError:
+                        # Unable to reshape the image data, trying a regular decode.
+                        img = cv2.imdecode(img, -1)
+                else:
+                    img = cv2.imdecode(img, -1)
+
+                if options.auto_rotate:
+                    img = ndimage.rotate(img, ROTATION_ANGLE[image.source.name])
+
+                # Save the image from the GetImage request to the current directory with the filename
+                # matching that of the image source.
+                image_saved_path = image.source.name + "_" + str(counter)
+                image_saved_path = image_saved_path.replace(
+                    '/', '')  # Remove any slashes from the filename the image is saved at locally.
+                cv2.imwrite("./image/" + image_saved_path + extension, img)
+                time.sleep(0.4) # Time margin between each image capture
+        
 def main(argv):
     # Parse args
     parser = argparse.ArgumentParser()
@@ -115,55 +175,22 @@ def main(argv):
         for source in image_sources:
             print('\t' + source.name)
     counter = 1
+    input("Press any key to start the image collection: ")
+    
+    # Start the thread to store images
+    event_handler.set()
+    t1 = threading.Thread(target=store_images, args=(options, image_client, counter))
+    t1.start()
     while True:
-        # Optionally capture one or more images.
-        if options.image_sources:
-            # Capture and save images to disk
-            pixel_format = pixel_format_string_to_enum(options.pixel_format)
-            image_request = [
-                build_image_request(source, pixel_format=pixel_format)
-                for source in options.image_sources
-            ]
-            image_responses = image_client.get_image(image_request)
-            print("Get image")
-            for image in image_responses:
-                num_bytes = 1  # Assume a default of 1 byte encodings.
-                if image.shot.image.pixel_format == image_pb2.Image.PIXEL_FORMAT_DEPTH_U16:
-                    dtype = np.uint16
-                    extension = '.png'
-                else:
-                    if image.shot.image.pixel_format == image_pb2.Image.PIXEL_FORMAT_RGB_U8:
-                        num_bytes = 3
-                    elif image.shot.image.pixel_format == image_pb2.Image.PIXEL_FORMAT_RGBA_U8:
-                        num_bytes = 4
-                    elif image.shot.image.pixel_format == image_pb2.Image.PIXEL_FORMAT_GREYSCALE_U8:
-                        num_bytes = 1
-                    elif image.shot.image.pixel_format == image_pb2.Image.PIXEL_FORMAT_GREYSCALE_U16:
-                        num_bytes = 2
-                    dtype = np.uint8
-                    extension = '.jpg'
-
-                img = np.frombuffer(image.shot.image.data, dtype=dtype)
-                if image.shot.image.format == image_pb2.Image.FORMAT_RAW:
-                    try:
-                        # Attempt to reshape array into a RGB rows X cols shape.
-                        img = img.reshape((image.shot.image.rows, image.shot.image.cols, num_bytes))
-                    except ValueError:
-                        # Unable to reshape the image data, trying a regular decode.
-                        img = cv2.imdecode(img, -1)
-                else:
-                    img = cv2.imdecode(img, -1)
-
-                if options.auto_rotate:
-                    img = ndimage.rotate(img, ROTATION_ANGLE[image.source.name])
-
-                # Save the image from the GetImage request to the current directory with the filename
-                # matching that of the image source.
-                image_saved_path = image.source.name + "_" + str(counter)
-                image_saved_path = image_saved_path.replace(
-                    '/', '')  # Remove any slashes from the filename the image is saved at locally.
-                cv2.imwrite("./image/" + image_saved_path + extension, img)
-                time.sleep(0.5) # Time margin
+        key = input("Press any key to pause the program and adjust your robot")
+        event_handler.clear()
+        key = input("Press any key (except q) to resume the program, press q to quit")
+        
+        event_handler.set()
+        if key == 'q':
+            break
+    image_collection_complete = True
+    t1.join()
     return True
 
 

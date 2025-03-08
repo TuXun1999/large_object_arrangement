@@ -9,3 +9,5 @@ venv
 instant-ngp
 GroundingDINO
 LoFTR
+samurai
+utils/image
