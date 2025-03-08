@@ -24,134 +24,24 @@ from bosdyn.client.math_helpers import SE3Pose, Quat
 
 import cv2
 from scipy.spatial.transform import Rotation as R
-from PIL import Image
-import numpy as np
-import json 
 
-from GroundingDINO.groundingdino.util.inference import \
-    load_model, load_image, predict, annotate
-from segment_anything import sam_model_registry, SamPredictor
-from segment_anything import SamPredictor
-import supervision as sv
-import torch
+import numpy as np
+
+
+
+
 from torchvision.ops import box_convert
 
 import open3d as o3d
 
 from pose_estimation.pose_estimation import estimate_camera_pose
 from grasp_pose_prediction.grasp_sq_mp import predict_grasp_pose_sq
-from preprocess import instant_NGP_screenshot
-from utils.image_process import point_select_from_custom_image
+
+from utils.image_process import point_select_from_custom_image, masked_image_generation
+
 '''
-Helper function to determine the bounding box
+Helper functions to move the robot
 '''
-def bounding_box_predict(image_name, target, visualization=False):
-    ## Predict the bounding box in the current image on the target object
-    # Specify the paths to the model
-    home_addr = os.path.join(os.getcwd(), "GroundingDINO")
-    DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    CONFIG_PATH = home_addr + "/groundingdino/config/GroundingDINO_SwinT_OGC.py"
-    WEIGHTS_PATH = home_addr + "/weights/groundingdino_swint_ogc.pth"
-    model = load_model(CONFIG_PATH, WEIGHTS_PATH, DEVICE)
-
-    IMAGE_PATH = image_name
-    TEXT_PROMPT = target
-    BOX_TRESHOLD = 0.3
-    TEXT_TRESHOLD = 0.3
-
-    # Load the image & Do the bounding box prediction
-    image_source, image = load_image(IMAGE_PATH)
-    boxes, logits, phrases = predict(
-        model=model, 
-        image=image, 
-        caption=TEXT_PROMPT, 
-        box_threshold=BOX_TRESHOLD, 
-        text_threshold=TEXT_TRESHOLD
-    )
-
-    # Display the annotated frame
-    annotated_frame = annotate(image_source=image_source, boxes=boxes, logits=logits, phrases=phrases)
-    if visualization:
-        sv.plot_image(annotated_frame, (16, 16))
-
-    # Return the bounding box coordinates
-    h, w, _ = image_source.shape
-    boxes = boxes * torch.Tensor([w, h, w, h])
-    xyxy = box_convert(boxes=boxes, in_fmt="cxcywh", out_fmt="xyxy").numpy()
-    if boxes.shape[0] == 0: # If there is no prediction
-        print("Failed to Detect the target object in current image")
-        print("Exiting...")
-        return None
-    elif boxes.shape[0] != 1: # If there are multiple target objects
-        xyxy = xyxy[int(torch.argmax(logits))] 
-        # Select the one with the highest confidence  
-    else:
-        xyxy = xyxy[0]
-    return xyxy, logits[0]
-
-def get_bounding_box_image(image, bbox, confidence):
-    ## Impose the image with the bounding box also
-    # Draw bounding boxes in the image
-    polygon = []
-    polygon.append([bbox[0], bbox[1]])
-    polygon.append([bbox[2], bbox[1]])
-    polygon.append([bbox[2], bbox[3]])
-    polygon.append([bbox[0], bbox[3]])
-
-    polygon = np.array(polygon, np.int32)
-    polygon = polygon.reshape((-1, 1, 2))
-    cv2.polylines(image, [polygon], True, (0, 255, 0), 2)
-
-    caption = "{} {:.3f}".format("Detected Bounding Box", confidence)
-    cv2.putText(image, caption, (int(bbox[0]), int(bbox[1])),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-
-    return image
-
-def segment(sam_predictor: SamPredictor, image: np.ndarray, xyxy: np.ndarray) -> np.ndarray:
-    ##The function to predict the segmentation mask of the target object
-    # using GroundingSAM
-    sam_predictor.set_image(image)
-    result_masks = []
-    for box in xyxy:
-        masks, scores, logits = sam_predictor.predict(
-            box=box,
-            multimask_output=True
-        )
-        index = np.argmax(scores)
-        result_masks.append(masks[index])
-    return np.array(result_masks)
-
-def get_mask_image(image_source, xyxy):
-    ## The function to generate an image with the background filtered out
-    # Construct the SAM predictor
-    home_addr = os.path.join(os.getcwd(), "GroundingDINO")
-    SAM_CHECKPOINT_PATH = home_addr + "/sam_weights/sam_vit_h_4b8939.pth"
-    SAM_ENCODER_VERSION = "vit_h"
-    DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    sam = sam_model_registry[SAM_ENCODER_VERSION](checkpoint=SAM_CHECKPOINT_PATH).to(device=DEVICE)
-    sam_predictor = SamPredictor(sam)
-
-    # Predict the segmentation mask
-    mask = segment(
-        sam_predictor=sam_predictor,
-        image=image_source,
-        xyxy=xyxy.reshape(1, -1) # Unsqueeze the bbox coordinates
-    )
-
-    # Manually filter out the mask
-    image_source = np.array(image_source)
-    h, w, _ = image_source.shape
-    image_masked = np.zeros((h, w, 4), dtype=np.uint8)
-    for i in range(h):
-        for j in range(w):
-            if mask[0][i][j]:
-                image_masked[i, j] = np.array(\
-                    [image_source[i, j, 0], image_source[i, j, 1],\
-                    image_source[i, j, 2], 255])
-       
-    return image_masked, mask
-
 def estimate_obj_pose_hand(bbox, image_response, distance):
     ## Estimate the target object pose (indicated by the bounding box) in hand frame
     bbox_center = [int((bbox[0] + bbox[2])/2), int((bbox[1] + bbox[3])/2)]
@@ -192,9 +82,6 @@ def estimate_obj_pose_hand(bbox, image_response, distance):
     result = SE3Pose(x=root[2], y=-root[0], z=-root[1], rot=Quat(w=1, x=0, y=0, z=0))
     return result
 
-'''
-Helper functions to move the robot
-'''
 def compute_stand_location_and_yaw(vision_tform_target, robot_state_client,
                                 distance_margin):
 
@@ -337,7 +224,6 @@ def grasp_target_obj(options):
     if (options.image_source != "hand_color_image"):
         print("Currently Only Support Hand Camera!")
         return True
-
     ## Fundamental Setup of the robotic platform
     bosdyn.client.util.setup_logging(options.verbose)
     # Authenticate with the robot
@@ -428,7 +314,7 @@ def grasp_target_obj(options):
 
         ## Create an UI to take the user input & find the target object
         target = input("What do you want to grasp?")
-
+ 
         time.sleep(1)
         ## Part 2: Take an image & Estimate Pose
         depth_image_source = "hand_depth_in_hand_color_frame"
@@ -441,24 +327,18 @@ def grasp_target_obj(options):
         image_name = os.path.join(options.nerf_model, "pose_estimation.jpg")
         cv2.imwrite(image_name, img)
         
-        # Filter out the background
-        xyxy, _ = bounding_box_predict(image_name, target)
-        img, mask = get_mask_image(img, xyxy)
-
-        # Also save the rgb image for reference
-        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        img_rgb, _ = get_mask_image(img_rgb, xyxy)
-
-        data = Image.fromarray(img_rgb, 'RGBA')
-        data.save(os.path.join(options.nerf_model, "pose_estimation_masked_rgb.png"))
-
-
+        # Call the function to generate the masked image
+        masked_image_generation(options.nerf_model, img, image_name, target)
+        
         # Read the preprocessed data
         images_reference_list = \
             ["/images/" + x for x in \
             os.listdir(options.nerf_model + "/images")]# All images under foler "images"
         mesh_filename = os.path.join(options.nerf_model , "target_obj.obj")
+        
+
         mesh = o3d.io.read_triangle_mesh(mesh_filename)
+        
         camera_pose_est, camera_proj_img, nerf_scale = \
                 estimate_camera_pose("/pose_estimation_masked_rgb.png", options.nerf_model, \
                                      images_reference_list, \
@@ -504,6 +384,41 @@ def grasp_target_obj(options):
         ##############
         # This is the correction for chair2_real
         gripper_pose_current[2, 3] = 12*0.0254*nerf_scale
+
+        # Optionally, pull the chair backward
+        if options.back:
+            # Find the gripper pose in body frame
+            body_T_hand = frame_helpers.get_a_tform_b(\
+                        robot_state_client.get_robot_state().kinematic_state.transforms_snapshot,
+                        frame_helpers.GRAV_ALIGNED_BODY_FRAME_NAME, \
+                        frame_helpers.HAND_FRAME_NAME)
+            body_T_hand = body_T_hand.to_matrix()
+            gripper_pose_current[0:3, 3] /= nerf_scale
+            # Find the chair pose in current body frame
+            chair_pose_body = body_T_hand@np.linalg.inv(gripper_pose_current)
+            gripper_pose_current[0:3, 3] *= nerf_scale
+            print("gripper current")
+            # Find the target pose of the chair
+            chair_pose_target = np.array([
+                [1, 0, 0, 0.5],
+                [0, 1, 0, 0],
+                [0, 0, 1, 0],
+                [0, 0, 0, 1]
+            ])
+
+            # Find the transformation in body frame (chair frame)
+            chair_pose_tran_body = np.linalg.inv(chair_pose_body)@chair_pose_target
+            # Assume the gripper will be applied the same transformation
+            body_T_hand_goal = body_T_hand@chair_pose_tran_body
+            # Convert it into the odom frame
+            odom_T_body = frame_helpers.get_a_tform_b(\
+                        robot_state_client.get_robot_state().kinematic_state.transforms_snapshot,
+                        frame_helpers.ODOM_FRAME_NAME, \
+                        frame_helpers.BODY_FRAME_NAME)
+            odom_T_body = odom_T_body.to_matrix()
+            odom_T_hand_goal = odom_T_body@body_T_hand_goal
+            odom_T_hand_goal = math_helpers.SE3Pose.from_matrix(odom_T_hand_goal)
+            print("odom")
 
         point_select = None
         if options.click:
@@ -615,6 +530,25 @@ def grasp_target_obj(options):
             grasp_pose_lineset_end.lines = o3d.utility.Vector2iVector(gripper_lines)
             grasp_pose_lineset_end.transform(grasp_pose_gripper)
             grasp_pose_lineset_end.paint_uniform_color((0, 1, 0))
+
+            # Optionally, visualize the goal chair pose and goal gripper pose
+            if options.back:
+                chair_goal_frame = o3d.geometry.TriangleMesh.create_coordinate_frame()
+                
+                chair_goal_vis_pose = chair_pose_tran_body
+                chair_goal_vis_pose[0:3, 3] *= nerf_scale
+                chair_goal_frame.transform(chair_goal_vis_pose)
+                chair_goal_frame.paint_uniform_color((0, 1, 0))
+                vis.add_geometry(chair_goal_frame)
+
+                hand_goal_frame = o3d.geometry.TriangleMesh.create_coordinate_frame()
+                hand_goal_frame.scale(20/64, [0, 0, 0])
+                hand_goal_vis_pose = np.linalg.inv(chair_pose_body)@body_T_hand_goal
+                hand_goal_vis_pose[0:3, 3] *= nerf_scale
+                hand_goal_frame.transform(hand_goal_vis_pose)
+                hand_goal_frame.paint_uniform_color((0, 0, 1))
+                vis.add_geometry(hand_goal_frame)
+            
             vis.add_geometry(gripper_start)
             vis.add_geometry(gripper_end)
             vis.add_geometry(grasp_pose_lineset_end)
@@ -683,17 +617,25 @@ def grasp_target_obj(options):
                     frame_helpers.GRAV_ALIGNED_BODY_FRAME_NAME, seconds)
             command_client.robot_command(arm_command)
             time.sleep(0.5)
-            # Move the robot back fro 0.5 m
-            VELOCITY_BASE_SPEED = 0.5 #[m/s]
-
             
-            move_cmd = RobotCommandBuilder.synchro_velocity_command(\
-                v_x=-VELOCITY_BASE_SPEED, v_y=0, v_rot=0)
+            # Find the goal gripper pose in body frame
+            body_T_odom = frame_helpers.get_a_tform_b(\
+                        robot_state.kinematic_state.transforms_snapshot,
+                        frame_helpers.GRAV_ALIGNED_BODY_FRAME_NAME, \
+                        frame_helpers.ODOM_FRAME_NAME)
+            # Correct the scale
+            odom_T_hand_goal.x /= nerf_scale
+            odom_T_hand_goal.y /= nerf_scale
+            odom_T_hand_goal.z /= nerf_scale
 
-            cmd_id = command_client.robot_command(command=move_cmd,
-                                end_time_secs=time.time() + 1)
-            # Wait until the robot reports that it is at the goal.
-            block_for_trajectory_cmd(command_client, cmd_id, timeout_sec=15, verbose=True)
+            # The goal hand pose in current body frame
+            body_T_hand_goal = body_T_odom.mult(odom_T_hand_goal)
+            arm_command = RobotCommandBuilder.arm_pose_command(
+                body_T_hand_goal.x, body_T_hand_goal.y, body_T_hand_goal.z, body_T_hand_goal.rot.w, body_T_hand_goal.rot.x,
+                body_T_hand_goal.rot.y, body_T_hand_goal.rot.z, \
+                    frame_helpers.GRAV_ALIGNED_BODY_FRAME_NAME, seconds)
+            command_client.robot_command(arm_command)
+            time.sleep(5.0)
         
         input("Waiting for the user to stop")
 

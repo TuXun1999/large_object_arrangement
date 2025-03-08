@@ -8,6 +8,14 @@ import torch
 from LoFTR.src.utils.plotting import make_matching_figure
 import matplotlib.cm as cm
 from utils.mesh_process import point_select_in_space
+
+from GroundingDINO.groundingdino.util.inference import \
+    load_model, load_image, predict, annotate
+from segment_anything import sam_model_registry, SamPredictor
+from segment_anything import SamPredictor
+from torchvision.ops import box_convert
+import supervision as sv
+from PIL import Image
 ##########################
 ## Part I: Manually Selected Point
 ##########################
@@ -322,4 +330,129 @@ def image_select_closest(image_name, images_reference_list, dataset_dir, matcher
     return image_name_closest
         
 
-    
+################################
+## Part III:  Find Masked Image given Target
+################################  
+'''
+Helper function to determine the bounding box
+'''
+def bounding_box_predict(image_name, target, visualization=False):
+    ## Predict the bounding box in the current image on the target object
+    # Specify the paths to the model
+    home_addr = os.path.join(os.getcwd(), "GroundingDINO")
+    DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    CONFIG_PATH = home_addr + "/groundingdino/config/GroundingDINO_SwinT_OGC.py"
+    WEIGHTS_PATH = home_addr + "/weights/groundingdino_swint_ogc.pth"
+    model = load_model(CONFIG_PATH, WEIGHTS_PATH, DEVICE)
+
+    IMAGE_PATH = image_name
+    TEXT_PROMPT = target
+    BOX_TRESHOLD = 0.3
+    TEXT_TRESHOLD = 0.3
+
+    # Load the image & Do the bounding box prediction
+    image_source, image = load_image(IMAGE_PATH)
+    boxes, logits, phrases = predict(
+        model=model, 
+        image=image, 
+        caption=TEXT_PROMPT, 
+        box_threshold=BOX_TRESHOLD, 
+        text_threshold=TEXT_TRESHOLD
+    )
+
+    # Display the annotated frame
+    annotated_frame = annotate(image_source=image_source, boxes=boxes, logits=logits, phrases=phrases)
+    if visualization:
+        sv.plot_image(annotated_frame, (16, 16))
+
+    # Return the bounding box coordinates
+    h, w, _ = image_source.shape
+    boxes = boxes * torch.Tensor([w, h, w, h])
+    xyxy = box_convert(boxes=boxes, in_fmt="cxcywh", out_fmt="xyxy").numpy()
+    if boxes.shape[0] == 0: # If there is no prediction
+        print("Failed to Detect the target object in current image")
+        print("Exiting...")
+        return None
+    elif boxes.shape[0] != 1: # If there are multiple target objects
+        xyxy = xyxy[int(torch.argmax(logits))] 
+        # Select the one with the highest confidence  
+    else:
+        xyxy = xyxy[0]
+    return xyxy, logits[0]
+
+def get_bounding_box_image(image, bbox, confidence):
+    ## Impose the image with the bounding box also
+    # Draw bounding boxes in the image
+    polygon = []
+    polygon.append([bbox[0], bbox[1]])
+    polygon.append([bbox[2], bbox[1]])
+    polygon.append([bbox[2], bbox[3]])
+    polygon.append([bbox[0], bbox[3]])
+
+    polygon = np.array(polygon, np.int32)
+    polygon = polygon.reshape((-1, 1, 2))
+    cv2.polylines(image, [polygon], True, (0, 255, 0), 2)
+
+    caption = "{} {:.3f}".format("Detected Bounding Box", confidence)
+    cv2.putText(image, caption, (int(bbox[0]), int(bbox[1])),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+    return image
+
+def segment(sam_predictor: SamPredictor, image: np.ndarray, xyxy: np.ndarray) -> np.ndarray:
+    ##The function to predict the segmentation mask of the target object
+    # using GroundingSAM
+    sam_predictor.set_image(image)
+    result_masks = []
+    for box in xyxy:
+        masks, scores, logits = sam_predictor.predict(
+            box=box,
+            multimask_output=True
+        )
+        index = np.argmax(scores)
+        result_masks.append(masks[index])
+    return np.array(result_masks)
+
+def get_mask_image(image_source, xyxy):
+    ## The function to generate an image with the background filtered out
+    # Construct the SAM predictor
+    home_addr = os.path.join(os.getcwd(), "GroundingDINO")
+    SAM_CHECKPOINT_PATH = home_addr + "/sam_weights/sam_vit_h_4b8939.pth"
+    SAM_ENCODER_VERSION = "vit_h"
+    DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    sam = sam_model_registry[SAM_ENCODER_VERSION](checkpoint=SAM_CHECKPOINT_PATH).to(device=DEVICE)
+    sam_predictor = SamPredictor(sam)
+
+    # Predict the segmentation mask
+    mask = segment(
+        sam_predictor=sam_predictor,
+        image=image_source,
+        xyxy=xyxy.reshape(1, -1) # Unsqueeze the bbox coordinates
+    )
+
+    # Manually filter out the mask
+    image_source = np.array(image_source)
+    h, w, _ = image_source.shape
+    image_masked = np.zeros((h, w, 4), dtype=np.uint8)
+    for i in range(h):
+        for j in range(w):
+            if mask[0][i][j]:
+                image_masked[i, j] = np.array(\
+                    [image_source[i, j, 0], image_source[i, j, 1],\
+                    image_source[i, j, 2], 255])
+       
+    return image_masked, mask
+
+
+
+def  masked_image_generation(nerf_model, img, image_name, target):
+    # Filter out the background
+    xyxy, _ = bounding_box_predict(image_name, target)
+    img, mask = get_mask_image(img, xyxy)
+
+    # Also save the rgb image for reference
+    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    img_rgb, _ = get_mask_image(img_rgb, xyxy)
+
+    data = Image.fromarray(img_rgb, 'RGBA')
+    data.save(os.path.join(nerf_model, "pose_estimation_masked_rgb.png"))

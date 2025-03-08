@@ -18,8 +18,7 @@ from utils.mesh_process import coordinate_correction, depth_map_mesh
 from grasp_pose_prediction.Marching_Primitives.mesh2sdf_convert import mesh2sdf_csv
 from grasp_pose_prediction.Marching_Primitives.MPS import add_mp_parameters
 from grasp_pose_prediction.grasp_sq_mp import predict_grasp_pose_sq
-from grasp_pose_prediction.grasp_contact_graspnet import \
-    predict_grasp_pose_contact_graspnet, grasp_pose_eval_gripper_cg
+
 
 sys.path.append(os.getcwd() + "/contact_graspnet_pytorch")
 from PIL import Image
@@ -261,7 +260,7 @@ if __name__ == "__main__":
     # camera_intrinsics_dict["camera_angle_x"] = 0.7204090661409585
     # camera_intrinsics_dict["camera_angle_y"] = 1.1772201404076283
 
-    nerf_dataset = "./data/luggage1_real"
+    nerf_dataset = "./data/chair1_real"
     ## NOTE: Attributes for the camera on the real robot
     camera_intrinsics_dict["w"] = 640
     camera_intrinsics_dict["h"] = 480

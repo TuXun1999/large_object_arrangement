@@ -153,7 +153,7 @@ def estimate_camera_pose(img_file, img_dir, images_reference_list, \
         vis= o3d.visualization.Visualizer()
         vis.create_window()
         vis.add_geometry(mesh)
-        
+
         vis.add_geometry(camera_frame_est)
         vis.add_geometry(pcd)
         vis.add_geometry(ball_select)
