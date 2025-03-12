@@ -8,9 +8,7 @@ from GroundingDINO.groundingdino.util.inference import \
 
 
 
-print("???")
 vis= o3d.visualization.Visualizer()
-print("???")
 vis.create_window()
 f =  o3d.geometry.TriangleMesh.create_coordinate_frame()
 vis.add_geometry(f)
