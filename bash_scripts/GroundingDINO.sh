@@ -25,3 +25,6 @@ mkdir sam_weights
 cd sam_weights
 wget -q https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth
 cd ../../
+
+## Update torch (somehow it's degraded)
+pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0

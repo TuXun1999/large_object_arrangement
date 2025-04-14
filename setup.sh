@@ -32,7 +32,7 @@ sudo apt-get install '^libxcb.*-dev' libx11-xcb-dev xorg-dev libglu1-mesa-dev li
 sudo apt-get install libsm6 libxrender1 libfontconfig1
 
 # pip3 install torch torchvision torchaudio
-pip install torch==2.4.1 torchvision==0.19.1 torchaudio==2.4.1 --index-url https://download.pytorch.org/whl/cu121
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 pip install numpy==1.24.4
 pip install open3d==0.18.0
 pip install trimesh

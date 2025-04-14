@@ -52,7 +52,7 @@ from bosdyn.util import seconds_to_duration
 
 import numpy as np
 import time
-
+from scipy.spatial.transform import Rotation as R
 
 
 '''
@@ -72,6 +72,35 @@ def pose_bd_to_vectors(pose:bdSE3Pose):
     pos = [pose.position.x, pose.position.y, pose.position.z]
     rot = [pose.rotation.w, pose.rotation.x, pose.rotation.y, pose.rotation.z]
     return pos, rot
+
+def pose_bd_interpolate_linear(pose1:bdSE3Pose, pose2:bdSE3Pose, segment:int):
+    '''Interpolate between two poses (linear)'''
+    pos1, rot1 = pose_bd_to_vectors(pose1)
+    pos2, rot2 = pose_bd_to_vectors(pose2)
+    pos_seq = np.linspace(pos1, pos2, segment+1, endpoint=True)
+    rot_seq = np.linspace(rot1, rot2, segment+1, endpoint=True)
+    pose_seq = []
+    for i in range(1, segment+1):
+        w, x, y, z = rot_seq[i]
+        pose_seq.append(bdSE3Pose(x=pos_seq[i][0], y=pos_seq[i][1], z=pos_seq[i][2], \
+                    rot=bdQuat(w=w, x=x, y=y, z=z)))
+    return pose_seq
+def pose_bd_interpolate_rotZ(pose1:bdSE3Pose, rot_axis_origin, angle, segment:int):
+    '''Interpolate poses along the rotation axis'''
+    pose_initial = pose1.to_matrix()
+    pose_seq = []
+    # Find the current rotation transformation matrix
+    K = np.eye(4)
+    K[0:3, 3] = rot_axis_origin
+    for i in range(1, segment+1):
+        rot_angle = angle * i / segment
+        rot = R.from_quat([0, 0, np.sin(rot_angle/2), np.cos(rot_angle/2)])
+        rot_tran = np.eye(4)
+        rot_tran[0:3, 0:3] = rot.as_matrix()
+        pose_traj = K @ rot_tran @ np.linalg.inv(K) @ pose_initial
+        pose_traj = bdSE3Pose.from_matrix(pose_traj)
+        pose_seq.append(pose_traj)
+    return pose_seq
 
 def offset_pose(pose:bdSE3Pose, distance, axis):
     '''Calculate the offset along the direction defined by axis'''
@@ -210,6 +239,8 @@ def trajectory_cmd(
         goal_y,
         goal_heading,
         cmd_duration,
+        robot_state_client,
+        robot_command_client,
         reference_frame=BODY_FRAME_NAME,
         frame_name="odom",
         build_on_command=None,
@@ -238,12 +269,13 @@ def trajectory_cmd(
         end_time = time.time() + cmd_duration
 
         T_in_ref = bdSE2Pose(x=goal_x, y=goal_y, angle=goal_heading)
-        T_in_target = transform_bd_pose(T_in_ref, reference_frame, frame_name)
+        T_in_target = transform_bd_pose(robot_state_client, T_in_ref, reference_frame, frame_name)
 
         if trajectory_params == None:
             trajectory_params = RobotCommandBuilder.mobility_params()
         
         response = robot_command(
+                robot_command_client,
                 RobotCommandBuilder.synchro_se2_trajectory_point_command(
                     goal_x=T_in_target.x,
                     goal_y=T_in_target.y,
@@ -414,7 +446,7 @@ def move_gripper(grasp_pose_obj, robot_state_client, command_client):
 Move the robot to the desired pose, while gripper attached to the object
 No force within the arm joints
 '''
-def drag_arm_to(robot_command_client, pose:bdSE3Pose, reference_frame, duration_sec=15.0):
+def drag_arm_to(robot_state_client, robot_command_client, pose:bdSE3Pose, reference_frame, duration_sec=15.0):
     '''Commands the robot to position the robot at the commanded
     pose while leaving the arm compliant thus allowing it to drag
     objects.
@@ -436,12 +468,12 @@ def drag_arm_to(robot_command_client, pose:bdSE3Pose, reference_frame, duration_
 
     pose = pose.get_closest_se2_transform()
     print(f'Sending Robot Command.')
-    succeeded, _, id = trajectory_cmd(
+    succeeded, e, id = trajectory_cmd(
         goal_x=pose.x, goal_y=pose.y,
         goal_heading=pose.angle,
         cmd_duration=duration_sec, 
+        robot_state_client=robot_state_client,
         reference_frame=reference_frame,
-        blocking=False,
         build_on_command=robot_cmd
     )
     if succeeded:
@@ -452,6 +484,7 @@ def drag_arm_to(robot_command_client, pose:bdSE3Pose, reference_frame, duration_
                                     logger=None)
     else: 
         print('Failed to send trajectory command.')
+        print(e)
         return False
     return True
 
@@ -459,7 +492,8 @@ def drag_arm_to(robot_command_client, pose:bdSE3Pose, reference_frame, duration_
 '''
 Move the obstacle to the pose, defined for the gripper
 '''
-def drag_arm_impedance(robot_command_client, gripper_target_pose:bdSE3Pose, spot_target_pose:bdSE3Pose,
+def drag_arm_impedance(robot_state_client, robot_command_client, \
+                       gripper_target_pose:bdSE3Pose, spot_target_pose:bdSE3Pose,
                                 reference_frame = BODY_FRAME_NAME, duration_sec=15.0):
     '''Commands the robot arm to perform an impedance command
     which allows it to move heavy objects or perform surface 
@@ -544,8 +578,9 @@ def drag_arm_impedance(robot_command_client, gripper_target_pose:bdSE3Pose, spot
         goal_x=pose.x, goal_y=pose.y,
         goal_heading=pose.angle,
         cmd_duration=duration_sec, 
+        robot_state_client=robot_state_client,
+        robot_command_client=robot_command_client,
         reference_frame=reference_frame,
-        blocking=False,
         build_on_command=gripper_arm_cmd,
         trajectory_params = drag_trajectory_params
     )
@@ -583,7 +618,8 @@ def joint_mobility_arm_cmd(self, pose, reference_frame):
 
 
 def move_heavy_object(robot_state_client, robot_command_client, \
-                      gripper_target_pose, spot_target_pose, reference_frame, target_frame=ODOM_FRAME_NAME):
+                      gripper_target_pose, spot_target_pose, reference_frame, \
+                        target_frame=ODOM_FRAME_NAME):
     '''Commands the robot to move an object to a desired pose.
     This involves dragging the object near the goal pose, then
     moving the arm to properly position it.
@@ -595,10 +631,13 @@ def move_heavy_object(robot_state_client, robot_command_client, \
     print('Moving a heavy object.')
     gripper_pose = to_bd_se3(robot_state_client, gripper_target_pose, reference_frame, ref_frame=target_frame)
     spot_pose = to_bd_se3(robot_state_client, spot_target_pose, reference_frame, ref_frame=target_frame)
-
-    # Move arm to adjust pose. 
-    drag_arm_impedance(robot_command_client, gripper_pose, spot_pose, target_frame,
-                            duration_sec=15.0)
+    print("===Target Location===")
+    print(gripper_pose)
+    print(spot_pose)
+    # Drag the object to the desired location
+    drag_arm_impedance(robot_state_client, robot_command_client, gripper_pose, \
+                    spot_pose, target_frame, duration_sec=10.0)
+    time.sleep(4)
 
 
 

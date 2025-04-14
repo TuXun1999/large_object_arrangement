@@ -33,8 +33,8 @@ docker run -it\
    --volume $XAUTH:$XAUTH\
    --privileged\
    --network=host\
-   --name="spot_ros2_dev"\
+   --name="spot_dev"\
    --gpus all\
    --runtime=nvidia\
-   spot_ros2_image:latest
+   spot_image:latest
    

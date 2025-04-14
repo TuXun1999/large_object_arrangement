@@ -5,7 +5,7 @@ hostgroup=$(id -gn $hostuser)
 hostgid=$(id -g $hostuser)
 
 docker build \
-       -t spot_ros2_image:latest\
+       -t spot_image:latest\
        --build-arg hostuser=$hostuser\
        --build-arg hostgroup=$hostgroup\
        --build-arg hostuid=$hostuid\

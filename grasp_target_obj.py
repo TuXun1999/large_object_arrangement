@@ -12,12 +12,15 @@ from bosdyn.client.image import ImageClient
 from bosdyn.client.robot_state import RobotStateClient
 from bosdyn.client import frame_helpers
 from bosdyn.client import math_helpers
-from bosdyn.client.frame_helpers import HAND_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME
+from bosdyn.client.frame_helpers import ODOM_FRAME_NAME, HAND_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME
 from bosdyn.api import \
     geometry_pb2, arm_command_pb2, robot_command_pb2, synchronized_command_pb2, trajectory_pb2
 from bosdyn.client.robot_command import RobotCommandBuilder, RobotCommandClient, blocking_stand
 from bosdyn.util import seconds_to_duration
 
+from bosdyn.client.math_helpers import SE2Pose as bdSE2Pose
+from bosdyn.client.math_helpers import SE3Pose as bdSE3Pose
+from bosdyn.client.math_helpers import Quat    as bdQuat
 
 import cv2
 from scipy.spatial.transform import Rotation as R
@@ -35,7 +38,9 @@ from pose_estimation.pose_estimation import estimate_camera_pose
 from grasp_pose_prediction.grasp_sq_mp import predict_grasp_pose_sq
 
 from utils.image_process import point_select_from_custom_image, masked_image_generation
-from utils.spot import move_gripper, move_heavy_object, predict_body_pose
+from utils.spot import move_gripper, move_heavy_object, \
+    predict_body_pose, predict_gripper_pose, pose_np_to_bd, pose_bd_interpolate_rotZ,\
+    transform_bd_pose
 
 def grasp_target_obj(options):
     if (options.image_source != "hand_color_image"):
@@ -200,7 +205,7 @@ def grasp_target_obj(options):
         # Manually force the height of the estimated gripper to match the measurement
         ##############
         # This is the correction for chair2_real
-        gripper_pose_current[2, 3] = 12*0.0254*nerf_scale
+        gripper_pose_current[2, 3] = 11.5*0.0254*nerf_scale
 
         # Optionally, pull the chair backward
         if options.back:
@@ -214,8 +219,7 @@ def grasp_target_obj(options):
             # Find the chair pose in current body frame
             obj_pose_body = body_T_hand@np.linalg.inv(gripper_pose_current)
             gripper_pose_current[0:3, 3] *= nerf_scale
-            print("gripper current")
-            # Find the target pose of the chair in body frame
+            # Find the target pose of the chair in current body frame
             obj_pose_target = np.array([
                 [1, 0, 0, 0.5],
                 [0, 1, 0, 0],
@@ -225,8 +229,7 @@ def grasp_target_obj(options):
 
             # Find the relative transformation in chair frame
             obj_pose_tran_obj = np.linalg.inv(obj_pose_body)@obj_pose_target
-            print("===Check relative transformation")
-            print(obj_pose_tran_obj)
+
 
         point_select = None
         if options.click:
@@ -374,9 +377,35 @@ def grasp_target_obj(options):
         if options.back:
             print("Checking relative transformation")
             print(obj_pose_tran_obj)
-            gripper_pose_tran_gripper = np.linalg.inv(grasp_pose_obj)@obj_goal_vis_pose@grasp_pose_obj
-            gripper_pose_tran_gripper[0:3, 3] /= nerf_scale
+            # Find the self-rotation of the object in object frame
+            theta = np.arctan2(obj_pose_tran_obj[1, 0], obj_pose_tran_obj[0, 0])
+            # No command executed so far. 
+            # So, it's safe to assume that the robot is at the initial pose
+            odom_T_body = frame_helpers.get_a_tform_b(\
+                        robot_state_client.get_robot_state().kinematic_state.transforms_snapshot,
+                        frame_helpers.ODOM_FRAME_NAME, \
+                        frame_helpers.GRAV_ALIGNED_BODY_FRAME_NAME)
+            # Find the current object pose in current odom frame
+            obj_pose_curr_odom = odom_T_body.to_matrix()@obj_pose_body
+            # Find the target object pose in current odom frame
+            obj_pose_target_odom = obj_pose_curr_odom@obj_pose_tran_obj
+            # Find the predicted object pose if only translation is applied
+            obj_pose_translate_odom = copy.deepcopy(obj_pose_curr_odom)
+            obj_pose_translate_odom[0:3, 3] = obj_pose_target_odom[0:3, 3]
+
+            # Assume that the gripper will undertake the same translation in obj
+            # (firstly find the translation in obj frame)
+            obj_pose_translate_obj = np.eye(4)
+            obj_pose_translate_obj[0:3, 3] = obj_pose_tran_obj[0:3, 3]
+
+            # Find the translation transformation in gripper frame
+            grasp_pose_obj_temp = copy.deepcopy(grasp_pose_obj)
+            grasp_pose_obj_temp[0:3, 3] /= nerf_scale
+            gripper_pose_tran_gripper = \
+                np.linalg.inv(grasp_pose_obj_temp)@obj_pose_translate_obj@grasp_pose_obj_temp
             print(gripper_pose_tran_gripper)
+
+        # Find the grasp pose to place gripper in gripper frame
         grasp_pose_obj = np.linalg.inv(gripper_pose_current)@grasp_pose_obj
         # Consider the symmetry along x-axis
         r = R.from_matrix(grasp_pose_obj[:3, :3])
@@ -414,54 +443,85 @@ def grasp_target_obj(options):
         # NOTE: the method to Directly move the gripper will cause problems (Aborted)
 
         # Move the object to the desired pose
-        body_pose_tran_gripper = predict_body_pose(robot_state_client, \
-                            gripper_pose_tran_gripper, HAND_FRAME_NAME)
-        print("==Test==")
+        body_pose_target_gripper = predict_body_pose(robot_state_client, \
+            pose_np_to_bd(gripper_pose_tran_gripper), HAND_FRAME_NAME)
+        print("==Test of translation==")
         print(gripper_pose_tran_gripper)
-        print(body_pose_tran_gripper)
-        if options.back:
-            move_heavy_object(robot_state_client, command_client, \
-                            gripper_pose_tran_gripper, body_pose_tran_gripper, HAND_FRAME_NAME)
+        print(body_pose_target_gripper)
+        # if options.back:
+        #     # Step 1: Move the object to the desired pose only in translation part
+        #     move_heavy_object(robot_state_client, command_client, \
+        #                     gripper_pose_tran_gripper, body_pose_target_gripper, HAND_FRAME_NAME)
+        #     # Step 2: Rotate the object to the desired pose
+            
+        #     # Find the current body frame in odom frame
+        #     print("INFO: Rotating the object (angle: " + str(theta) + ")")
+            
+        #     g = frame_helpers.get_a_tform_b(\
+        #                 robot_state_client.get_robot_state().kinematic_state.transforms_snapshot,
+        #                 frame_helpers.ODOM_FRAME_NAME, \
+        #                 frame_helpers.GRAV_ALIGNED_BODY_FRAME_NAME)
+        #     body_pose_seq_odom = pose_bd_interpolate_rotZ(\
+        #         g, obj_pose_translate_odom[0:3, 3], theta, 2)
+        #     for body_pose_odom in body_pose_seq_odom:
+        #         gripper_pose_odom = predict_gripper_pose(robot_state_client, \
+        #                         body_pose_odom, ODOM_FRAME_NAME)
+        #         move_heavy_object(robot_state_client, command_client, \
+        #                     gripper_pose_odom, body_pose_odom, ODOM_FRAME_NAME)
 
 
         # Force the relative transformation between gripper and body & move the body
-        # if options.back:
-        #     # Command the robot to fix up the relative transformation between
-        #     # its gripper and the body
-        #     # Transform the desired pose from the moving body frame to the odom frame.
-        #     robot_state = robot_state_client.get_robot_state()
-        #     body_T_hand = frame_helpers.get_a_tform_b(\
-        #                 robot_state.kinematic_state.transforms_snapshot,
-        #                 frame_helpers.GRAV_ALIGNED_BODY_FRAME_NAME, \
-        #                 frame_helpers.HAND_FRAME_NAME)
+        if options.back:
+            # Command the robot to fix up the relative transformation between
+            # its gripper and the body
+            # Transform the desired pose from the moving body frame to the odom frame.
+            robot_state = robot_state_client.get_robot_state()
+            body_T_hand = frame_helpers.get_a_tform_b(\
+                        robot_state.kinematic_state.transforms_snapshot,
+                        frame_helpers.GRAV_ALIGNED_BODY_FRAME_NAME, \
+                        frame_helpers.HAND_FRAME_NAME)
 
-        #     # duration in seconds
-        #     seconds = 5.0
+            # duration in seconds
+            seconds = 5.0
 
-        #     # Create the arm command & send it (theoretically, the robot shouldn't move)
-        #     arm_command = RobotCommandBuilder.arm_pose_command(
-        #         body_T_hand.x, body_T_hand.y, body_T_hand.z, body_T_hand.rot.w, body_T_hand.rot.x,
-        #         body_T_hand.rot.y, body_T_hand.rot.z, \
-        #             frame_helpers.GRAV_ALIGNED_BODY_FRAME_NAME, seconds)
-        #     command_client.robot_command(arm_command)
-        #     time.sleep(0.5)
+            # Create the arm command & send it (theoretically, the robot shouldn't move)
+            arm_command = RobotCommandBuilder.arm_pose_command(
+                body_T_hand.x, body_T_hand.y, body_T_hand.z, body_T_hand.rot.w, body_T_hand.rot.x,
+                body_T_hand.rot.y, body_T_hand.rot.z, \
+                    frame_helpers.GRAV_ALIGNED_BODY_FRAME_NAME, seconds)
+            command_client.robot_command(arm_command)
+            time.sleep(0.5)
             
-        #     # Find the goal gripper pose in body frame
-        #     relative_trans = SE3Pose.from_matrix(gripper_pose_tran_gripper)
-        #     print("Checking se3 relative transformation")
-        #     print(relative_trans)
+            # Find the goal gripper pose in body frame
+            body_pose_tran_body = transform_bd_pose(robot_state_client, \
+                            body_pose_target_gripper, HAND_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME)
+            relative_trans = body_pose_tran_body
+            print("Checking se3 relative transformation")
+            print(relative_trans)
 
-        #     # Find SE2Pose for the base
-        #     relative_trans_se2 = relative_trans.get_closest_se2_transform()
-        #     print("Checking se2 relative transformation")
-        #     print(relative_trans_se2)
-        #     print(relative_trans_se2.x)
-        #     # The goal hand pose in current body frame
-        #     base_command = RobotCommandBuilder.synchro_trajectory_command_in_body_frame(\
-        #               relative_trans_se2.x, relative_trans_se2.y, \
-        #                 relative_trans_se2.angle, robot.get_frame_tree_snapshot())
-        #     command_client.robot_command(base_command)
-        #     time.sleep(5.0)
+            # Find SE2Pose for the base
+            relative_trans_se2 = relative_trans.get_closest_se2_transform()
+            print("Checking se2 relative transformation")
+            print(relative_trans_se2)
+            # The goal spot pose in current body frame
+            # synchro_se2_trajectory_point_command(
+            #         goal_x=T_in_target.x,
+            #         goal_y=T_in_target.y,
+            #         goal_heading=T_in_target.angle,
+            #         frame_name=frame_name,
+            #         params=trajectory_params,
+            # base_command = RobotCommandBuilder.synchro_trajectory_command_in_body_frame(\
+            #           relative_trans_se2.x, relative_trans_se2.y, \
+            #             relative_trans_se2.angle, robot.get_frame_tree_snapshot(),\
+            #             params=RobotCommandBuilder.mobility_params())
+            base_command = RobotCommandBuilder.synchro_trajectory_command_in_body_frame(
+                            goal_x_rt_body=relative_trans_se2.x,
+                            goal_y_rt_body=relative_trans_se2.y,
+                            goal_heading_rt_body=relative_trans_se2.angle,
+                            frame_tree_snapshot=robot_state.kinematic_state.transforms_snapshot,
+                            params=RobotCommandBuilder.mobility_params())
+            command_client.robot_command(base_command, end_time_secs=time.time() + 5)
+            time.sleep(5.0)
         
         input("Waiting for the user to stop")
 
