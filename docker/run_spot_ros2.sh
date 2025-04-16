@@ -32,6 +32,8 @@ docker run -it\
    --env "XAUTHORITY=$XAUTH"\
    --volume $XAUTH:$XAUTH\
    --privileged\
+   --device=/dev/bus/usb\
+   -v /dev/bus/usb:/dev/bus/usb\
    --network=host\
    --name="spot_dev"\
    --gpus all\

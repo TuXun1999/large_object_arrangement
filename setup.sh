@@ -25,12 +25,11 @@ fi
 
 # activate virtualenv; 
 source ${SPOT_PATH}/venv/spot/bin/activate
-pip install -U pip>=20.3
+
 ## Install the dependencies
 pip install empy==3.3.4
 sudo apt-get install '^libxcb.*-dev' libx11-xcb-dev xorg-dev libglu1-mesa-dev libxrender-dev libxi-dev libxkbcommon-dev libxkbcommon-x11-dev
 sudo apt-get install libsm6 libxrender1 libfontconfig1
-
 # pip3 install torch torchvision torchaudio
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 pip install numpy==1.24.4
@@ -53,7 +52,8 @@ pip install bosdyn-api
 pip install bosdyn-core
 pip install bosdyn-choreography-client
 
-
+## wandb (logger)
+pip install wandb
 
 
 

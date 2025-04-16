@@ -2,8 +2,6 @@
 # FROM ubuntu:22.04
 FROM nvidia/cuda:12.1.0-devel-ubuntu22.04
 
-#RMW ZENOH experimental flag
-ARG EXPERIMENTAL_ZENOH_RMW=FALSE
 
 # Set noninteractive mode for APT
 ENV DEBIAN_FRONTEND=noninteractive
@@ -27,12 +25,17 @@ RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o 
     | tee /etc/apt/sources.list.d/ros2.list > /dev/null \
     && apt-get update
 
+# Install dependencies for pyrealsense
+RUN apt-get update && apt-get install -y \
+    git cmake build-essential libusb-1.0-0-dev pkg-config \
+    libglfw3-dev libgl1-mesa-dev libglu1-mesa-dev python3-venv python3-pip\
+    && rm -rf /var/lib/apt/lists/*
+    
 # Install dependencies
 RUN apt-get update -q && \
     apt-get install -yq --no-install-recommends \
     wget \ 
     software-properties-common \ 
-    python3-pip \
     python-is-python3 \
     python3-argcomplete \
     python3-colcon-common-extensions \
