@@ -10,6 +10,7 @@ git submodule update
 ./install_spot_ros2.sh
 
 cd ../../
+pip install catkin_pkg
 colcon build --symlink-install
 
 source install/setup.bash
