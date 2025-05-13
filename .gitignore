@@ -13,3 +13,4 @@ samurai
 utils/image
 rl
 ros2_ws
+gripper_poses_move_chair.json

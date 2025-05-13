@@ -11,7 +11,7 @@ import cv2
 import os
 import numpy as np
 from scipy import ndimage
-from spot import SPOT, pixel_format_type_strings
+from robot import SPOT, pixel_format_type_strings
 import bosdyn
 from bosdyn.client.image import ImageClient
 

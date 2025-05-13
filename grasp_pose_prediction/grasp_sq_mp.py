@@ -4,9 +4,6 @@ import os
 
 import sys
 sys.path.append(os.getcwd())
-pyngp_path = os.getcwd() + "/instant-ngp/build"
-sys.path.append(pyngp_path)
-import pyngp as ngp
 
 import pyrender
 import trimesh
