@@ -37,6 +37,8 @@ for i in range(len(gripper_poses_all)):
 # fundamental_frame = o3d.geometry.TriangleMesh.create_coordinate_frame()
 # fundamental_frame.scale(0.1, [0, 0, 0])
 # vis.add_geometry(fundamental_frame)
+# Failed:
+# 4
 vis.run()
 # Close all windows
 vis.destroy_window()

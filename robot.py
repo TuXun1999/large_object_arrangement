@@ -79,9 +79,9 @@ from tensordict import TensorDict, TensorDictBase
 # Hyperparameters for SPOT
 VELOCITY_CMD_DURATION = 0.5  # seconds
 COMMAND_INPUT_RATE = 0.1
-VELOCITY_HAND_NORMALIZED = 0.5  # normalized hand velocity [0,1]
+VELOCITY_HAND_NORMALIZED = 0.3  # [0.5] normalized hand velocity [0,1]
 VELOCITY_ANGULAR_HAND = 1.0  # rad/sec
-VELOCITY_BASE_SPEED = 0.5  # m/s
+VELOCITY_BASE_SPEED = 0.2  # [0.5] m/s
 VELOCITY_BASE_ANGULAR = 0.8  # rad/sec
 ROTATION_ANGLE = {
     'back_fisheye_image': 0,
@@ -1167,8 +1167,8 @@ class SPOT:
     def _rotate_ccw(self):
         self._arm_cylindrical_velocity_cmd_helper('rotate_ccw', v_theta=VELOCITY_HAND_NORMALIZED)
 
-    def _rotate_cw(self):
-        self._arm_cylindrical_velocity_cmd_helper('rotate_cw', v_theta=-VELOCITY_HAND_NORMALIZED)
+    def _rotate_cw(self, velocity_duration = VELOCITY_CMD_DURATION):
+        self._arm_cylindrical_velocity_cmd_helper('rotate_cw', v_theta=-VELOCITY_HAND_NORMALIZED, velocity_duration=velocity_duration)
 
     def _move_up(self):
         self._arm_cylindrical_velocity_cmd_helper('move_up', v_z=VELOCITY_HAND_NORMALIZED)
@@ -1194,7 +1194,7 @@ class SPOT:
     def _rotate_minus_rz(self):
         self._arm_angular_velocity_cmd_helper('rotate_minus_rz', v_rz=-VELOCITY_ANGULAR_HAND)
 
-    def _arm_cylindrical_velocity_cmd_helper(self, desc='', v_r=0.0, v_theta=0.0, v_z=0.0):
+    def _arm_cylindrical_velocity_cmd_helper(self, desc='', v_r=0.0, v_theta=0.0, v_z=0.0, velocity_duration = VELOCITY_CMD_DURATION):
         """ Helper function to build a arm velocity command from unitless cylindrical coordinates.
 
         params:
@@ -1213,9 +1213,9 @@ class SPOT:
         arm_velocity_command = arm_command_pb2.ArmVelocityCommand.Request(
             cylindrical_velocity=cylindrical_velocity,
             end_time=self.robot.time_sync.robot_timestamp_from_local_secs(time.time() +
-                                                                           VELOCITY_CMD_DURATION))
+                                                                           velocity_duration))
 
-        self._arm_velocity_cmd_helper(arm_velocity_command=arm_velocity_command, desc=desc)
+        self._arm_velocity_cmd_helper(arm_velocity_command=arm_velocity_command, desc=desc, velocity_duration=velocity_duration)
 
     def _arm_angular_velocity_cmd_helper(self, desc='', v_rx=0.0, v_ry=0.0, v_rz=0.0):
         """ Helper function to build a arm velocity command from angular velocities measured with respect
@@ -1242,7 +1242,7 @@ class SPOT:
 
         self._arm_velocity_cmd_helper(arm_velocity_command=arm_velocity_command, desc=desc)
 
-    def _arm_velocity_cmd_helper(self, arm_velocity_command, desc=''):
+    def _arm_velocity_cmd_helper(self, arm_velocity_command, desc='', velocity_duration = VELOCITY_CMD_DURATION):
 
         # Build synchronized robot command
         robot_command = robot_command_pb2.RobotCommand()
@@ -1250,7 +1250,7 @@ class SPOT:
             arm_velocity_command)
 
         self._start_robot_command(desc, robot_command,
-                                  end_time_secs=time.time() + VELOCITY_CMD_DURATION)
+                                  end_time_secs=time.time() + velocity_duration)
     def _start_robot_command(self, desc, command_proto, end_time_secs=None):
 
         def _start_command():
@@ -1369,6 +1369,9 @@ class SPOT:
         result = SE3Pose(x=root[2], y=-root[0], z=-root[1], rot=Quat(w=1, x=0, y=0, z=0))
         return result
     def correct_body(self, obj_pose_hand):
+        '''
+        The function to rotate the body to center the object of interest
+        '''
         # Find the object pose in body frame
         robot_state = self.state_client.get_robot_state()
         body_T_hand = frame_helpers.get_a_tform_b(\
@@ -1378,11 +1381,14 @@ class SPOT:
         body_T_obj = body_T_hand * obj_pose_hand
 
         # Rotate the body 
-        body_T_obj_se2 = body_T_obj.get_closest_se2_transform()
-
+        body_T_obj_se2_angle = np.arctan2(body_T_obj.position.y, body_T_obj.position.x) #body_T_obj.get_closest_se2_transform()
+        print("Correct body")
+        print(obj_pose_hand)
+        print(body_T_hand)
+        print(body_T_obj)
         # Command the robot to rotate its body
         move_command = RobotCommandBuilder.synchro_trajectory_command_in_body_frame(\
-            0, 0, body_T_obj_se2.angle, \
+            0, 0, body_T_obj_se2_angle, \
                 robot_state.kinematic_state.transforms_snapshot, \
                 params=self.get_walking_params(0.6, 1))
         id = self.command_client.robot_command(command=move_command, \
@@ -1392,6 +1398,18 @@ class SPOT:
                                     feedback_interval_secs=5, 
                                     timeout_sec=10,
                                     logger=None)
+        print("Body corrected")
+    def correct_arm(self, obj_pose_hand):
+        '''
+        The function to rotate the arm to center the object of interest
+        '''
+        # arm_rot_angle = np.arctan2(obj_pose_hand.position.y, obj_pose_hand.position.x)
+        # print("Correct arm")
+        # print(obj_pose_hand)
+        # print(arm_rot_angle)
+        # velocity_duration = (arm_rot_angle) / VELOCITY_HAND_NORMALIZED
+        # self._rotate_cw(velocity_duration=velocity_duration)
+        # TODO: move the arm to center the target object
 
 
 
@@ -1425,8 +1443,10 @@ class SPOT:
                 frame_name=ODOM_FRAME_NAME, \
                 params=self.get_walking_params(0.6, 1),\
                 build_on_command=gripper_command)
+        print("Moving command built")
         id = self.command_client.robot_command(command=move_command, \
                                                end_time_secs=time.time() + 10)
+        print("Moving command sent")
         block_for_trajectory_cmd(self.command_client,
                                     cmd_id=id, 
                                     feedback_interval_secs=5, 

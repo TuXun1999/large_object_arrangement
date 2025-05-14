@@ -160,7 +160,7 @@ def collect_images(total_images, robot, options, obj_pose_hand_first, target_obj
         counter += 1
         ## Move the robot around the target object
         # Test a small angle at first
-        angle = -np.pi/12 # (2*np.pi)/N
+        angle = -(2*np.pi)/N
         robot.move_base_arc(obj_pose_hand_first, angle)
 
         time.sleep(1)
@@ -171,7 +171,7 @@ def collect_images(total_images, robot, options, obj_pose_hand_first, target_obj
         image_pose_est_name = os.path.join(os.path.dirname(initial_image), "1" + image_extensions[0])
         cv2.imwrite(image_pose_est_name, images[0])
 
-        # Find the bounding box of the target in the first image
+        # Find the bounding box of the target in the current image
         # TODO: replace it with Samurai
         xyxy, _ = bounding_box_predict_samurai(os.path.join(os.path.dirname(initial_image)),\
                                  initial_xyxy, visualization=True)
@@ -183,7 +183,7 @@ def collect_images(total_images, robot, options, obj_pose_hand_first, target_obj
         obj_pose_hand = robot.estimate_obj_pose_hand(xyxy, image_responses[0], distance)
 
         # Finetune the spot's pose
-        robot.correct_body(obj_pose_hand)
+        robot.correct_arm(obj_pose_hand)
 
         ## Formally store the image
         # Capture another image at the corrected pose
@@ -256,7 +256,7 @@ def main(argv):
         print("===Estimated Distance from Depth sensor===")
         print(distance)
         # Rotate the robot around the object
-        N = 5
+        N = 24
 
         t1 = threading.Thread(target = collect_images, \
                 args=(N, robot, options, obj_pose_hand, target_obj, image_pose_initial_name, xyxy))

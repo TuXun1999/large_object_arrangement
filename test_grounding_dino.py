@@ -14,7 +14,7 @@ import matplotlib
 import cv2
 from PIL import Image
 
-home_addr = os.path.expanduser('~') + "/repo/multi-purpose-representation/GroundingDINO"
+home_addr = os.path.expanduser('~') + "/large_object_rearrangement/GroundingDINO"
 IMAGE_NAME = "pose_estimation.jpg"
 CONFIG_PATH = home_addr + "/groundingdino/config/GroundingDINO_SwinT_OGC.py"
 WEIGHTS_PATH = home_addr + "/weights/groundingdino_swint_ogc.pth"
